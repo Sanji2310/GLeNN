@@ -5,7 +5,7 @@ Box-modeled like the head:
     2. Delete the -X half, Mirror (Clipping) and Subdivision Surface.
     3. Grab each cage vertex (G) onto the helmet's outer shape: a dome on
        top, fuller and straighter below so the opening clears the jaw.
-    4. Delete the faces under the neck line to open the helmet.
+    4. Bisect along the neck line with Clear Inner to open the helmet.
     5. Visor opening: select the front band at eye level, Inset, Extrude it
        inwards and crease its rim; the visor itself is a copy of those faces
        (Duplicate, Separate) so it can come off.
@@ -36,7 +36,8 @@ CHIN = 0.016                           # chin bar juts forward below the visor
 UP, DOWN = 0.172, 0.150                # dome above the centre, fuller sides below it
 P_FLAT, Q_UP, Q_DOWN = 2.2, 2.2, 4.0   # horizontal and vertical superellipse exponents
 NECK_FRONT, NECK_BACK = 1.548, 1.575   # opening line, chin bar to nape
-VISOR_Z = (1.640, 1.732)               # brow to mid-nose
+VISOR_Z = (1.646, 1.732)               # picks two whole rows of the cage at eye level
+VISOR_LINES = (1.638, 1.734)           # where the opening's bottom and top edges are grabbed to
 VISOR_WRAP = math.radians(64)          # wraps round to the sides
 SHELL_THICKNESS = 0.010
 STAND = Vector((0.86, -0.12, 1.0))     # beside his right hand, for the presentation
@@ -75,16 +76,11 @@ def _shape(name):
     K.drag(name, moves)
 
 
-def _neck_line(p):
-    f = min(1.0, max(0.0, (p.y - CENTER.y + 0.10) / 0.25))
-    return NECK_FRONT + (NECK_BACK - NECK_FRONT) * f
-
-
 def _visor_edges(p):
     """Bottom and top line of the visor opening: an eye-port, a little
     narrower in height towards the sides."""
     s = (p.x / HALF_X) ** 2
-    return VISOR_Z[0] + 0.006 + 0.012 * s, VISOR_Z[1] - 0.004 - 0.010 * s
+    return VISOR_LINES[0] + 0.012 * s, VISOR_LINES[1] - 0.010 * s
 
 
 def _in_visor(p):
@@ -180,20 +176,19 @@ def build():
     mirror.use_clip = mirror.use_mirror_merge = True
     K.mode("EDIT")
     _shape(SHELL)
-    # open the neck
-    K.sel(SHELL, lambda c: c.z < _neck_line(c), kind="FACE")
-    K.op(bpy.ops.mesh.delete, type="FACE")
-    # grab the opening's edge onto the neck line, so it runs clean, not in steps
+    # open the neck: Bisect along the neck line (front to nape) with Clear Inner
     mw = ob.matrix_world
-    bm = bmesh.from_edit_mesh(ob.data)
-    edge = [(v.index, mw @ v.co) for v in bm.verts if v.is_boundary and (mw @ v.co).z < CENTER.z - 0.04]
-    K.drag(SHELL, [(i, (p.x, p.y, _neck_line(p))) for i, p in edge])
+    k = (NECK_BACK - NECK_FRONT) / 0.25
+    K.op(bpy.ops.mesh.select_all, action="SELECT")
+    K.op(bpy.ops.mesh.bisect, plane_co=(0.0, CENTER.y - 0.10, NECK_FRONT),
+         plane_no=tuple(Vector((0.0, -k, 1.0)).normalized()), clear_inner=True)
     # visor opening: Inset, crease its rim, Extrude in
     K.sel(SHELL, _in_visor, kind="FACE")
     bm = bmesh.from_edit_mesh(ob.data)
     sel = [f for f in bm.faces if f.select]
     rim = {v.index: mw @ v.co for f in sel for e in f.edges
-           if sum(1 for lf in e.link_faces if lf.select) == 1 for v in e.verts}
+           if sum(1 for lf in e.link_faces if lf.select) == 1 for v in e.verts
+           if abs(v.co.x) > 1e-5 or sum(1 for lf in v.link_faces if lf.select) == 1}   # midline: ends only
     mid = sum(VISOR_Z) / 2
     moves = []
     for i, p in rim.items():
