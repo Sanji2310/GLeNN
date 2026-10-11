@@ -22,6 +22,8 @@ mixed without turning the view.
 Only works in the interactive Blender (it needs a 3D View).
 """
 
+import contextlib
+
 import bmesh
 import bpy
 from bpy_extras import view3d_utils
@@ -61,6 +63,8 @@ def view3d():
 
 
 def override(view=None):
+    if not bpy.context.window_manager.windows:
+        return contextlib.nullcontext()     # background Blender: no 3D View needed
     win, area, region = region_for(view)
     return bpy.context.temp_override(window=win, area=area, region=region)
 
@@ -224,6 +228,42 @@ def sel(obj_name, pred, kind="VERT", extend=False):
     bm.select_flush_mode()
     bmesh.update_edit_mesh(ob.data)
     return n
+
+
+def drag(obj_name, moves, proportional=0.0):
+    """Edit Mode: grab (G) each vertex index to its world-space target, one
+    at a time. With proportional > 0 the neighbours follow (O)."""
+    ob = bpy.data.objects[obj_name]
+    mw = ob.matrix_world
+    bpy.context.tool_settings.mesh_select_mode = (True, False, False)
+    for i, target in moves:
+        bm = bmesh.from_edit_mesh(ob.data)
+        bm.verts.ensure_lookup_table()
+        for f in bm.faces:
+            f.select_set(False)
+        for v in bm.verts:
+            v.select_set(False)
+        v = bm.verts[i]
+        v.select_set(True)
+        d = Vector(target) - mw @ v.co
+        bmesh.update_edit_mesh(ob.data)
+        if d.length < 1e-6:
+            continue
+        with override():
+            bpy.ops.transform.translate(value=tuple(d), use_proportional_edit=proportional > 0,
+                                        proportional_edit_falloff="SMOOTH",
+                                        proportional_size=max(proportional, 1e-4), use_proportional_connected=False)
+
+
+def nearest(obj_name, point, among=None):
+    """Index of the vertex nearest a world-space point (Edit Mode)."""
+    ob = bpy.data.objects[obj_name]
+    mw = ob.matrix_world
+    bm = bmesh.from_edit_mesh(ob.data)
+    bm.verts.ensure_lookup_table()
+    pool = bm.verts if among is None else [bm.verts[i] for i in among]
+    p = Vector(point)
+    return min(pool, key=lambda v: (mw @ v.co - p).length).index
 
 
 def remesh(obj_name, voxel):
