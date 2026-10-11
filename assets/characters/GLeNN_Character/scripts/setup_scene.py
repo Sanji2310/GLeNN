@@ -130,7 +130,7 @@ def cameras():
         data = bpy.data.cameras.new(name)
         data.clip_start, data.clip_end = 0.05, 60.0
         if name == "CAM_Rear":
-            data.clip_start = 5.0     # look through the back of the cyclorama
+            data.clip_start = 7.6     # look through the back of the cyclorama, curve included
         if lens is None:
             data.type = "ORTHO"
             data.ortho_scale = ortho

@@ -58,6 +58,25 @@ The sculpt meshes are dense on purpose: they are design-stage sculpts, not game 
 - Boots: indigo with a cream sole, amber heel tab and amber strap.
 - Helmet (separate and removable, shown on a stand): cream shell, indigo crown band and chin wrap, amber pinstripes, dark visor, 61 on the chin.
 
+## Approval renders (v1)
+
+Rendered with `scripts/bg_render.py` in Cycles, 128 samples, OptiX on the RTX 3050, from the saved master file. Files are in `renders/approval_*.png` on the PC; the composed sheet is `renders/approval_v1_sheet.jpg`.
+
+| View | Camera | Mode | Time |
+| --- | --- | --- | ---: |
+| Front | CAM_Front (ortho) | beauty, helmet hidden | (laptop slept mid-render) |
+| Side | CAM_Side (ortho) | beauty, helmet hidden | 329 s |
+| Rear | CAM_Rear (ortho) | beauty, helmet hidden | re-rendered after the clip fix |
+| Three-quarter | CAM_ThreeQuarter | beauty | 89 s |
+| Hero | CAM_Hero | beauty | 156 s |
+| Face | CAM_Face | beauty | 198 s |
+| Helmet | CAM_Helmet | beauty | 168 s |
+| Clay | CAM_ThreeQuarter | clay override | about 90 s |
+
+The first rear render had the feet hidden by the curve of the cyclorama. `CAM_Rear` now clips at 7.6 m so it sees past the curve; the master file was saved with that change.
+
+Design notes from the renders: the suit, livery, proportions and helmet read well. The face reads older and gaunter than intended (small eyes, thin lips, skin too pale under this lighting, a hard dark edge at the hairline). Those are the next design fixes.
+
 ## Known limits at this stage
 
 - The nose is still slightly large and the upper lip thin. These are face refinements for the next pass.
