@@ -129,6 +129,8 @@ def cameras():
     for name, (loc, target, lens, ortho, _res) in CAMERAS.items():
         data = bpy.data.cameras.new(name)
         data.clip_start, data.clip_end = 0.05, 60.0
+        if name == "CAM_Rear":
+            data.clip_start = 5.0     # look through the back of the cyclorama
         if lens is None:
             data.type = "ORTHO"
             data.ortho_scale = ortho

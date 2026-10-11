@@ -41,17 +41,19 @@ ROWS_FIXED = [80, 71, 62, 53, 44, 36, 29, 22, 16, 11, 6, 1, -5, -12, -20, -30]
 ROWS_LOWER = 6
 
 PORT_PHI = 61.875          # half-width of the eye port (11 columns)
-PORT_THETA = (-5.0, 16.0)  # bottom and top rows of the eye port
-VISOR_PHI = 73.125         # 13 columns
-VISOR_THETA = (-12.0, 22.0)
+PORT_THETA = (-5.0, 16.0)  # nominal bottom and top rows of the eye port
+VISOR_END = 93.0           # the visor tapers to its pivots at the sides
+VISOR_COLS, VISOR_ROWS = 64, 8
 
 # Size (metres). Origin is the wearer's eye line, centre of the head.
-A = 0.136        # half width
-B_FRONT = 0.150  # forward reach
-B_BACK = 0.170   # rear reach
-C_TOP = 0.158    # crown height above the eye line
-C_LOW = 0.150    # depth below the eye line
-SQUARE = 2.35    # superellipse exponent for flatter, faster sides
+# The shell clears the head and hair by 3 to 4 cm all round, room for the
+# EPS liner and comfort padding.
+A = 0.139        # half width
+B_FRONT = 0.152  # forward reach
+B_BACK = 0.178   # rear reach
+C_TOP = 0.181    # crown height above the eye line
+C_LOW = 0.152    # depth below the eye line
+SQUARE = 2.5     # superellipse exponent for flatter, faster sides
 
 
 def smoothstep(e0, e1, x):
@@ -66,6 +68,34 @@ def bottom_theta(phi):
     return -58.0 + 15.0 * math.exp(-((a - 100.0) / 32.0) ** 2) - 2.0 * smoothstep(140, 180, a)
 
 
+def port_top(phi):
+    """Top edge of the eye port: rises a little toward the ends."""
+    u = min(abs(phi) / PORT_PHI, 1.0)
+    return PORT_THETA[1] + 3.0 * u * u
+
+
+def port_bottom(phi):
+    """Bottom edge of the eye port: sweeps up toward the ends, so the port
+    narrows into the sides instead of ending as a square box."""
+    u = min(abs(phi) / PORT_PHI, 1.0)
+    return PORT_THETA[0] + 10.0 * u ** 2.2
+
+
+def warp_theta(phi, theta):
+    """Move the grid rows so the eye port edges follow port_top and
+    port_bottom; rows away from the port are unchanged."""
+    fade = smoothstep(PORT_PHI + 45.0, PORT_PHI + 5.0, abs(phi))
+    top = PORT_THETA[1] + (port_top(phi) - PORT_THETA[1]) * fade
+    bot = PORT_THETA[0] + (port_bottom(phi) - PORT_THETA[0]) * fade
+    knots = [(-20.0, -20.0), (PORT_THETA[0], bot), (PORT_THETA[1], top), (36.0, 36.0)]
+    if theta <= knots[0][0] or theta >= knots[-1][0]:
+        return theta
+    for (a0, b0), (a1, b1) in zip(knots, knots[1:]):
+        if a0 <= theta <= a1:
+            return b0 + (b1 - b0) * (theta - a0) / (a1 - a0)
+    return theta
+
+
 def surface(phi, theta):
     """Point on the outer shell for azimuth phi (0 = front) and elevation."""
     p, t = math.radians(phi), math.radians(theta)
@@ -74,10 +104,16 @@ def surface(phi, theta):
     n = SQUARE
     k = (abs(sp) ** n + abs(cp) ** n) ** (-1.0 / n)
     b = B_FRONT if cp < 0 else B_BACK
-    ct = math.cos(t)
+    # below the eye line the shell stays full down to the jaw, so it reads
+    # as a helmet rather than a ball
+    ct = math.cos(t) if t > 0 else math.cos(t) ** 0.7
+    # brow: a soft lip over the eye port
+    brow = math.exp(-((theta - port_top(phi) - 5.0) / 4.5) ** 2) * smoothstep(PORT_PHI + 12.0, PORT_PHI - 18.0, abs(phi))
+    k *= 1.0 + 0.032 * brow
     x = A * k * sp * ct
     y = b * k * cp * ct
-    z = (C_TOP if t > 0 else C_LOW) * math.sin(t)
+    # the crown peaks slightly behind the middle
+    z = (C_TOP * (1.0 - 0.035 * cp) if t > 0 else C_LOW) * math.sin(t)
     # chin bar: push forward and slightly down at the front, below the port
     front = max(0.0, math.cos(p)) ** 2
     chin = smoothstep(-8.0, -40.0, theta) * front
@@ -98,8 +134,9 @@ def build_shell_mesh(name):
     rows = []        # rows[r][c] = BMVert
     thetas = []      # thetas[r][c]
     for r, th in enumerate(ROWS_FIXED):
-        rows.append([bm.verts.new(surface(ph, th)) for ph in phis])
-        thetas.append([th] * COLS)
+        trow = [warp_theta(ph, th) for ph in phis]
+        rows.append([bm.verts.new(surface(ph, t)) for ph, t in zip(phis, trow)])
+        thetas.append(trow)
     for i in range(1, ROWS_LOWER + 1):
         row, trow = [], []
         for ph in phis:
@@ -199,15 +236,28 @@ def shell():
 
 
 def visor():
-    bm, cells, phis = build_shell_mesh("HLM_Visor")
-    keep = {f for (c, r), f in cells.items()
-            if abs(cell_center(phis, c, r)[0]) < VISOR_PHI
-            and VISOR_THETA[0] < cell_center(phis, c, r)[1] < VISOR_THETA[1]}
-    bmesh.ops.delete(bm, geom=[f for f in bm.faces if f not in keep], context="FACES")
-    # offset the visor just outside the shell
-    bm.normal_update()
-    for v in bm.verts:
-        v.co += v.normal * 0.004
+    """Its own quad patch over the eye port: overlaps the port by 6 degrees
+    and tapers at each end into the pivot, like a real visor."""
+    bm = bmesh.new()
+    uv = bm.loops.layers.uv.new("UVMap")
+    grid = []
+    for c in range(VISOR_COLS + 1):
+        phi = -VISOR_END + 2.0 * VISOR_END * c / VISOR_COLS
+        s = smoothstep(PORT_PHI + 2.0, VISOR_END, abs(phi))
+        top = (port_top(phi) + 6.0) * (1 - s) + 9.0 * s
+        bot = (port_bottom(phi) - 6.0) * (1 - s) + (-1.0) * s
+        col = []
+        for r in range(VISOR_ROWS + 1):
+            th = top + (bot - top) * r / VISOR_ROWS
+            p, n, _, _ = surface_frame(phi, th)
+            col.append(bm.verts.new(p + n * 0.004))
+        grid.append(col)
+    for c in range(VISOR_COLS):
+        for r in range(VISOR_ROWS):
+            f = bm.faces.new((grid[c][r], grid[c][r + 1], grid[c + 1][r + 1], grid[c + 1][r]))
+            for loop, (cc, rr) in zip(f.loops, ((c, r), (c, r + 1), (c + 1, r + 1), (c + 1, r))):
+                loop[uv].uv = (cc / VISOR_COLS, 1.0 - rr / VISOR_ROWS)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     mesh = bpy.data.meshes.new("HLM_Visor")
     bm.to_mesh(mesh)
     bm.free()
@@ -242,14 +292,16 @@ def gasket():
     pts = []
     lo, hi = PORT_THETA
     steps = 22
+    def edge(phi, th):
+        return surface(phi, warp_theta(phi, th))
     for i in range(steps + 1):                       # top edge, left to right
-        pts.append(surface(-PORT_PHI + 2 * PORT_PHI * i / steps, hi))
+        pts.append(edge(-PORT_PHI + 2 * PORT_PHI * i / steps, hi))
     for i in range(1, 6):                            # right side, down
-        pts.append(surface(PORT_PHI, hi + (lo - hi) * i / 6))
+        pts.append(edge(PORT_PHI, hi + (lo - hi) * i / 6))
     for i in range(steps + 1):                       # bottom edge, right to left
-        pts.append(surface(PORT_PHI - 2 * PORT_PHI * i / steps, lo))
+        pts.append(edge(PORT_PHI - 2 * PORT_PHI * i / steps, lo))
     for i in range(1, 6):                            # left side, up
-        pts.append(surface(-PORT_PHI, lo + (hi - lo) * i / 6))
+        pts.append(edge(-PORT_PHI, lo + (hi - lo) * i / 6))
     return boundary_curve("HLM_Gasket", pts, 0.0045)
 
 
@@ -303,8 +355,10 @@ def spoiler():
         phi = 180.0 - span + 2 * span * t
         base, n, tp, tt = surface_frame(phi, theta0)
         back = Vector((base.x, base.y, 0.0)).normalized()
-        chord = 0.004 + 0.020 * smoothstep(0.0, 0.3, t) * smoothstep(1.0, 0.7, t)
-        ring = [bm.verts.new(base + back * (chord * s) + n * h) for s, h in section]
+        mid = smoothstep(0.0, 0.3, t) * smoothstep(1.0, 0.7, t)
+        chord = 0.004 + 0.009 * mid
+        lift = 0.15 + 0.85 * mid          # the ends tuck into the shell
+        ring = [bm.verts.new(base + back * (chord * s) + n * (h * lift - 0.001 * (1 - mid))) for s, h in section]
         grid.append(ring)
     m = len(section)
     for i in range(cols):
@@ -344,7 +398,7 @@ def _ellipsoid_on_surface(name, phi, theta, size, sink=0.0, segs=(24, 12)):
 
 
 def intake():
-    pod = _ellipsoid_on_surface("HLM_Intake", 0.0, 56.0, (0.017, 0.056, 0.0105), sink=0.05)
+    pod = _ellipsoid_on_surface("HLM_Intake", 0.0, 58.0, (0.013, 0.046, 0.0055), sink=0.35)
     mouth = _ellipsoid_on_surface("HLM_IntakeMouth", 0.0, 41.0, (0.012, 0.0035, 0.0065), sink=0.35)
     return pod, mouth
 
